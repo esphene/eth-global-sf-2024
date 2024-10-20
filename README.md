@@ -15,15 +15,16 @@ Essence Vault is a multisig wallet on Essential. Due to the declarative nature o
 4. Receive fund
 5. Send fund (again, this requires `m-of-n` approvals)
 6. Propose transactions - proposals for new transactions are created on-chain and require on-chain voting/approvals.
-7. Approve or reject transactions - each member can approve or reject transactions on-chain. Once m approvals are reached, the transaction is executed.
+7. Approve transactions - each member can approve transactions on-chain. Once m approvals are reached, the transaction is executed.
 8. View wallet state - query wallet info like balance, members, configurations and pending proposals.
 
 # Future Functionalities
 
 1. Revoke approval - a member can revoke their on-chain approval before the transaction has enough votes to be executed.
-2. Set time-locked approvals - on-chain time locks where a transaction has to wait till a certain time before it can be executed.
-3. Set transaction limits - on-chain limits for different transaction amounts that might automatically adjust approval requirements or allow automatic execution. E.g. larger amount requires a larger `m`.
-4. Staking - instead of just letting wallet fund sit there, stake a percentage of the fund. (Can apply statistics and some AI to study behaviour of fund's transactions i.e. In/Out to suggest amount to stake and portfolio strategy.)
+2. Reject proposal - members can also explicitly reject a proposal.
+3. Set time-locked approvals - on-chain time locks where a transaction has to wait till a certain time before it can be executed.
+4. Set transaction limits - on-chain limits for different transaction amounts that might automatically adjust approval requirements or allow automatic execution. E.g. larger amount requires a larger `m`.
+5. Fund investment - instead of just letting wallet fund sit there, do low/no-risk investment of the fund. E.g. stake a percentage of the fund. (Can apply statistics and some AI to study behaviour of fund's transactions i.e. In/Out to suggest amount to stake and portfolio strategy.)
 
 ## Useful links
 
@@ -31,3 +32,4 @@ Essence Vault is a multisig wallet on Essential. Due to the declarative nature o
 2. [The Book of Pint](https://essential-contributions.github.io/pint/book/)
 3. [The Essential Specs](https://essential-contributions.github.io/specs/specs/index.html?ref=blog.essential.builders)
 4. [Sample Applications](https://github.com/essential-contributions/essential-integration/tree/main/apps)
+
