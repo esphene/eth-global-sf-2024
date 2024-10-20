@@ -1,0 +1,342 @@
+// ==================================================
+//          Multisig Wallet Contract
+// ==================================================
+
+
+// ++++++++++++++++++++ Storage +++++++++++++++++++++
+
+storage {
+    // Wallet balances
+    balances: (b256 => int),
+
+    // Members of the multisig wallet
+    members: (b256 => bool),
+
+    // Approval configuration (m-of-n approvals from members)
+    min_approvals: int,
+
+    // Map of pending transaction proposals
+    proposals: (int => {
+        proposer: b256, // Does not need to be one of the members
+        recipient: b256,
+        amount: int,
+        approvals: int,
+        approved_by: (b256 => bool)
+    }),
+
+    // Next proposal ID
+    next_proposal_id: int,
+
+    // The contract's account address // TODO find out if we need this
+    wallet_address: b256
+}
+
+// Type for Secp256k1Signature (used for member signatures)
+type Secp256k1Signature = { b256, b256, int };
+
+// +++++++++++++++++++ Predicates +++++++++++++++++++
+
+predicate ReceiveFunds {
+
+    // The sender who is depositing funds into the wallet
+    var from: b256;
+    
+    // The amount to deposit
+    var amount: int;
+
+    state wallet_balance = mut storage::balances[wallet_address];
+
+    if wallet_balance == nil {
+        constraint wallet_balance' == amount;
+    } else {
+        constraint wallet_balance' == wallet_balance + amount;
+    }
+}
+
+predicate ProposeTransaction {
+
+    // The proposer of the transaction (can be a member or a non-member)
+    var proposer: b256;
+
+    // The recipient of the transaction
+    var recipient: b256;
+
+    // The amount to be sent
+    var amount: int;
+
+    // The proposal ID
+    var proposal_id: int;
+
+    // The proposal signature
+    var signature: Secp256k1Signature;
+
+    // Next available proposal ID
+    state next_proposal_id = mut storage::next_proposal_id;
+
+    // Current wallet balance
+    state wallet_balance = storage::balances[wallet_address];
+
+    // Check if the proposer is a member
+    state is_member = storage::members[proposer];
+
+    // Wallet has enough funds for the proposed transaction
+    constraint wallet_balance >= amount;
+
+    // A record of proposal is on-chain
+    constraint storage::proposals[proposal_id] == {
+        proposer: proposer,
+        recipient: recipient,
+        amount: amount,
+        approvals: (is_member == true ? 1 : 0),  // Start at 1 if member, else 0
+        approved_by: (is_member == true ? { proposer => true } : { })
+    };
+
+    // Next proposal ID is incremented
+    constraint next_proposal_id' == next_proposal_id + 1;
+
+}
+
+predicate ApproveTransaction {
+
+    // The member approving the transaction
+    var approver: b256;
+
+    // The proposal ID
+    var proposal_id: int;
+
+    // The approval signature
+    var signature: Secp256k1Signature;
+
+    state proposal = mut storage::proposals[proposal_id];
+
+    state min_approvals = storage::min_approvals;
+
+    state wallet_balance = mut storage::balances[wallet_address];
+
+    // The approver must be a member who hasn't yet approved the proposal
+    state is_member = storage::members[approver];
+    constraint is_member == true;
+
+    state has_approved = proposal.approved_by[approver];
+    constraint has_approved == nil;
+
+    constraint proposal.approved_by[approver]' == true;
+    constraint proposal.approvals' == proposal.approvals + 1;
+
+    // Check if the required number of approvals has been met
+    // if so, the state will have additional constraints to reflect the executed transaction
+    if proposal.approvals' == min_approvals {
+        constraint wallet_balance' == wallet_balance - proposal.amount;
+        constraint storage::proposals[proposal_id] == nil;
+        constraint wallet_balance >= proposal.amount;
+    }
+
+    // Valid signature of the approval
+    constraint @validate_signature(signature; approver; { proposal_id });
+}
+
+predicate ProposeAddMember {
+    // The member proposing to add a new member
+    var proposer: b256;
+
+    // The new member's address
+    var new_member: b256;
+
+    // The proposal ID
+    var proposal_id: int;
+
+    // Next proposal ID
+    state next_proposal_id = mut storage::next_proposal_id;
+
+    // The proposer must be a member
+    state is_proposer_member = storage::members[proposer];
+    constraint is_proposer_member == true;
+
+    // Ensure the new member isn't already a member
+    state is_new_member = storage::members[new_member];
+    constraint is_new_member == nil;
+
+    // Create a proposal to add the new member with 1 approval from the proposer
+    constraint storage::proposals[proposal_id] == {
+        proposer: proposer,
+        new_member: new_member,
+        approvals: 1,
+        approved_by: { proposer => true }
+    };
+
+    // Increment the next proposal ID
+    constraint next_proposal_id' == next_proposal_id + 1;
+}
+
+predicate ApproveAddMember {
+
+    // The member approving the addition of a new member
+    var approver: b256;
+
+    // The proposal ID
+    var proposal_id: int;
+
+    // Read the proposal
+    state proposal = mut storage::proposals[proposal_id];
+
+    // Read the number of approvals required
+    state min_approvals = storage::min_approvals;
+
+    // The approver must be a member
+    state is_approver_member = storage::members[approver];
+    constraint is_approver_member == true;
+
+    // Ensure the approver has not already approved the proposal
+    state has_approved = proposal.approved_by[approver];
+    constraint has_approved == nil;
+
+    // Approve the proposal
+    constraint proposal.approved_by[approver]' == true;
+    constraint proposal.approvals' == proposal.approvals + 1;
+
+    // If the proposal receives enough approvals, add the new member
+    if proposal.approvals' == min_approvals {
+        constraint storage::members[proposal.new_member]' == true;
+        constraint storage::proposals[proposal_id] == nil;
+    }
+}
+
+predicate ProposeRemoveMember {
+    // The member proposing to remove another member
+    var proposer: b256;
+
+    // The member to be removed
+    var member_to_remove: b256;
+
+    // The proposal ID
+    var proposal_id: int;
+
+    // Read the next available proposal ID
+    state next_proposal_id = mut storage::next_proposal_id;
+
+    // The proposer must be a member
+    state is_proposer_member = storage::members[proposer];
+    constraint is_proposer_member == true;
+
+    // The member to remove must be a current member
+    state is_member_to_remove = storage::members[member_to_remove];
+    constraint is_member_to_remove == true;
+
+    // Ensure the proposer is not removing themselves
+    constraint proposer != member_to_remove;
+
+    // Create a proposal to remove the member with 1 approval from the proposer
+    constraint storage::proposals[proposal_id] == {
+        proposer: proposer,
+        member_to_remove: member_to_remove,
+        approvals: 1,
+        approved_by: { proposer => true }
+    };
+
+    // Increment the next proposal ID
+    constraint next_proposal_id' == next_proposal_id + 1;
+}
+
+predicate ApproveRemoveMember {
+    // The member approving the removal of another member
+    var approver: b256;
+
+    // The proposal ID
+    var proposal_id: int;
+
+    // Read the proposal
+    state proposal = mut storage::proposals[proposal_id];
+
+    // Read the number of approvals required
+    state min_approvals = storage::min_approvals;
+
+    // The approver must be a member
+    state is_approver_member = storage::members[approver];
+    constraint is_approver_member == true;
+
+    // Ensure the approver has not already approved the proposal
+    state has_approved = proposal.approved_by[approver];
+    constraint has_approved == nil;
+
+    // Approve the proposal
+    constraint proposal.approved_by[approver]' == true;
+    constraint proposal.approvals' == proposal.approvals + 1;
+
+    // If the proposal receives enough approvals, remove the member
+    if proposal.approvals' == min_approvals {
+        constraint storage::members[proposal.member_to_remove]' == nil;
+        constraint storage::proposals[proposal_id] == nil;
+    }
+}
+
+
+predicate ProposeUpdateMinApprovals {
+    // The member proposing to change the approval threshold
+    var proposer: b256;
+
+    // The new minimum number of approvals
+    var new_min_approvals: int;
+
+    // The proposal ID
+    var proposal_id: int;
+
+    // Read the next available proposal ID
+    state next_proposal_id = mut storage::next_proposal_id;
+
+    // The proposer must be a member
+    state is_proposer_member = storage::members[proposer];
+    constraint is_proposer_member == true;
+
+    // The new minimum approvals must be at least 1 and not more than the total number of members
+    state total_members = len(storage::members);
+    constraint new_min_approvals >= 1;
+    constraint new_min_approvals <= total_members;
+
+    // Create a proposal to update the min approvals with 1 approval from the proposer
+    constraint storage::proposals[proposal_id] == {
+        proposer: proposer,
+        new_min_approvals: new_min_approvals,
+        approvals: 1,
+        approved_by: { proposer => true }
+    };
+
+    // Increment the next proposal ID
+    constraint next_proposal_id' == next_proposal_id + 1;
+}
+
+predicate ApproveUpdateMinApprovals {
+    // The member approving the change in the approval threshold
+    var approver: b256;
+
+    // The proposal ID
+    var proposal_id: int;
+
+    // Read the proposal
+    state proposal = mut storage::proposals[proposal_id];
+
+    // Read the number of approvals required
+    state min_approvals = storage::min_approvals;
+
+    // The approver must be a member
+    state is_approver_member = storage::members[approver];
+    constraint is_approver_member == true;
+
+    // Ensure the approver has not already approved the proposal
+    state has_approved = proposal.approved_by[approver];
+    constraint has_approved == nil;
+
+    // Approve the proposal
+    constraint proposal.approved_by[approver]' == true;
+    constraint proposal.approvals' == proposal.approvals + 1;
+
+    // If the proposal receives enough approvals, update the minimum approvals
+    if proposal.approvals' == min_approvals {
+        constraint storage::min_approvals' == proposal.new_min_approvals;
+        constraint storage::proposals[proposal_id] == nil;
+    }
+}
+
+// Macro to validate signatures
+macro @validate_signature($signature, $key, $data) {
+    __sha256(__recover_secp256k1(__sha256($data), $signature)) == $key
+}
